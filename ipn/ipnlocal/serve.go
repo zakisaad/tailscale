@@ -432,6 +432,108 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 	handler(c)
 }
 
+func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) (handler func(net.Conn) error) {
+	b.mu.Lock()
+	sc := b.serveConfig
+	b.mu.Unlock()
+
+	if !sc.Valid() {
+		return nil
+	}
+
+	nm := b.NetMap()
+	if nm == nil {
+		return nil
+	}
+
+	dport := dstAddr.Port()
+
+	//TODO(kevinliang10): is there a place we can save this map so we don't have to generate such a map
+	// every single time? (same question, will store a map ip to name in lb)
+	vipServiceIPMap := nm.GetVIPServiceIPMap()
+	dstSvc, ok := vipServiceIPMap[dstAddr.Addr()]
+	if !ok {
+		b.logf("The destination addr doesn't belong to a know service.")
+		return nil
+	}
+
+	tcph, ok := sc.FindServiceTCP(dstSvc, dstAddr.Port())
+	if !ok {
+		return nil
+	}
+
+	if tcph.HTTPS() || tcph.HTTP() {
+		hs := &http.Server{
+			Handler: http.HandlerFunc(b.serveWebHandler),
+			BaseContext: func(_ net.Listener) context.Context {
+				return serveHTTPContextKey.WithValue(context.Background(), &serveHTTPContext{
+					SrcAddr:  srcAddr,
+					DestPort: dport,
+				})
+			},
+		}
+		if tcph.HTTPS() {
+			// TODO(kevinliang10): just leaving this TLS cert creation as if we don't have other
+			// hostnames, but for services this getTLSServeCetForPort will need a version that also take
+			// in the hostname. How to store the TLS cert is still being discussed.
+			hs.TLSConfig = &tls.Config{
+				GetCertificate: b.getTLSServeCertForPort(dport),
+			}
+			return func(c net.Conn) error {
+				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
+			}
+		}
+
+		return func(c net.Conn) error {
+			return hs.Serve(netutil.NewOneConnListener(c, nil))
+		}
+	}
+
+	if backDst := tcph.TCPForward(); backDst != "" {
+		return func(conn net.Conn) error {
+			defer conn.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
+			cancel()
+			if err != nil {
+				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				return nil
+			}
+			defer backConn.Close()
+			if sni := tcph.TerminateTLS(); sni != "" {
+				conn = tls.Server(conn, &tls.Config{
+					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+						ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+						defer cancel()
+						pair, err := b.GetCertPEM(ctx, sni)
+						if err != nil {
+							return nil, err
+						}
+						cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+						if err != nil {
+							return nil, err
+						}
+						return &cert, nil
+					},
+				})
+			}
+
+			errc := make(chan error, 1)
+			go func() {
+				_, err := io.Copy(backConn, conn)
+				errc <- err
+			}()
+			go func() {
+				_, err := io.Copy(conn, backConn)
+				errc <- err
+			}()
+			return <-errc
+		}
+	}
+
+	return nil
+}
+
 // tcpHandlerForServe returns a handler for a TCP connection to be served via
 // the ipn.ServeConfig. The funnelFlow can be nil if this is not a funneled
 // connection.

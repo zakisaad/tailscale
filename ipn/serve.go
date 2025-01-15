@@ -603,7 +603,22 @@ func (v ServeConfigView) Webs() iter.Seq2[HostPort, WebServerConfigView] {
 				}
 			}
 		}
+		for _, service := range v.Services().All() {
+			for k, v := range service.Web().All() {
+				if !yield(k, v) {
+					return
+				}
+			}
+		}
 	}
+}
+
+func (v ServeConfigView) FindServiceTCP(svcName string, port uint16) (res TCPPortHandlerView, ok bool) {
+	svcCfg, ok := v.Services().GetOk(svcName)
+	if !ok {
+		return res, ok
+	}
+	return svcCfg.TCP().GetOk(port)
 }
 
 // FindTCP returns the first TCP that matches with the given port. It
@@ -624,6 +639,11 @@ func (v ServeConfigView) FindTCP(port uint16) (res TCPPortHandlerView, ok bool) 
 func (v ServeConfigView) FindWeb(hp HostPort) (res WebServerConfigView, ok bool) {
 	for _, conf := range v.Foreground().All() {
 		if res, ok := conf.Web().GetOk(hp); ok {
+			return res, ok
+		}
+	}
+	for _, service := range v.Services().All() {
+		if res, ok := service.Web().GetOk(hp); ok {
 			return res, ok
 		}
 	}
