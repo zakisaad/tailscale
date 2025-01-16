@@ -200,7 +200,6 @@ func TestConcurrentOSUserSwitchingOnWindows(t *testing.T) {
 		client := server.getClientAs(name)
 		watcher, cancelWatcher := client.WatchIPNBus(ctx, ipn.NotifyInitialState)
 		defer cancelWatcher()
-
 		runtime.Gosched()
 
 		// Get the current user from the LocalBackend's perspective
@@ -236,7 +235,6 @@ func TestConcurrentOSUserSwitchingOnWindows(t *testing.T) {
 		// And should still be the current user (as they're still connected)...
 		server.checkCurrentUser(client.User)
 	}
-
 	numIterations := 10
 	for range numIterations {
 		numGoRoutines := 100

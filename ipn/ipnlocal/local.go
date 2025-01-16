@@ -4143,8 +4143,6 @@ func (b *LocalBackend) handlePeerAPIConn(remote, local netip.AddrPort, c net.Con
 }
 
 func (b *LocalBackend) isLocalIP(ip netip.Addr) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	nm := b.NetMap()
 	return nm != nil && views.SliceContains(nm.GetAddresses(), netip.PrefixFrom(ip, ip.BitLen()))
 }

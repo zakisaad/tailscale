@@ -680,13 +680,13 @@ func (v ServeConfigView) HasFunnelForTarget(target HostPort) bool {
 
 // HasValidServicesConfig reports whether if ServeConfig has at least
 // one service in the serveConfig with invalid configuration.
-func (v ServeConfigView) HasValidServicesConfig() error {
-	for _, service := range v.Services().All() {
-		if err := service.isValidConfig(); err != nil {
-			return err
+func (sc *ServeConfig) HasValidServicesConfig() bool {
+	for _, service := range sc.Services {
+		if service.isValidConfig() {
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
 // ServicePortRange returns the list of tailcfg.ProtoPortRange that represents
@@ -730,9 +730,9 @@ func (v ServiceConfigView) ServicePortRange() []tailcfg.ProtoPortRange {
 // isValidConfig checks if the service configuration is valid.
 // Currently, the only invalid configuration is when the service is in Tun mode
 // and has TCP or Web handlers.
-func (v ServiceConfigView) isValidConfig() error {
-	if v.Tun() && (v.TCP().Len() > 0 || v.Web().Len() > 0) {
-		return errors.New("service in Tun mode cannot have TCP or Web handlers")
+func (v *ServiceConfig) isValidConfig() bool {
+	if v.Tun && (len(v.TCP) > 0 || len(v.Web) > 0) {
+		return false
 	}
-	return nil
+	return true
 }

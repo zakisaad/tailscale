@@ -275,8 +275,8 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
 	}
 
-	if err := config.View().HasValidServicesConfig(); err != nil {
-		return err
+	if config != nil && !config.HasValidServicesConfig() {
+		return errors.New("Services are not correctly configured")
 	}
 
 	nm := b.netMap

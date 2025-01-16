@@ -103,12 +103,15 @@ func (nm *NetworkMap) GetAddresses() views.Slice[netip.Prefix] {
 
 func (nm *NetworkMap) GetVIPServiceIPMap() tailcfg.ServiceIPMappings {
 	var zero tailcfg.ServiceIPMappings
+	if nm == nil {
+		return zero
+	}
 	if !nm.SelfNode.Valid() {
 		return zero
 	}
 
 	ipMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](nm.SelfNode.AsStruct().CapMap, tailcfg.CapabilityVIPServiceDestinations)
-	if err != nil {
+	if len(ipMaps) != 1 || err != nil {
 		return zero
 	}
 
@@ -119,6 +122,10 @@ func (nm *NetworkMap) GetVIPServiceIPMap() tailcfg.ServiceIPMappings {
 
 func (nm *NetworkMap) GetIPVIPServiceMap() tailcfg.IPServiceMappings {
 	var res tailcfg.IPServiceMappings
+	if nm == nil {
+		return res
+	}
+
 	if !nm.SelfNode.Valid() {
 		return res
 	}
