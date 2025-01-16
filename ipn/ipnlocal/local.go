@@ -318,8 +318,9 @@ type LocalBackend struct {
 	offlineAutoUpdateCancel func()
 
 	// ServeConfig fields. (also guarded by mu)
-	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
-	serveConfig       ipn.ServeConfigView // or !Valid if none
+	lastServeConfJSON mem.RO                    // last JSON that was parsed into serveConfig
+	serveConfig       ipn.ServeConfigView       // or !Valid if none
+	ipVIPServiceMap   tailcfg.IPServiceMappings // map of VIPService IPs to their corresponding service names
 
 	webClient          webClient
 	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
@@ -524,6 +525,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	b.e.SetJailedFilter(noneFilter)
 
 	b.setTCPPortsIntercepted(nil)
+	b.setVIPServicesTCPPortsIntercepted(nil)
 
 	b.statusChanged = sync.NewCond(&b.statusLock)
 	b.e.SetStatusCallback(b.setWgengineStatus)
@@ -3383,13 +3385,23 @@ func generateInterceptVIPServicesTCPPortFunc(svcAddrPorts map[netip.Addr]func(ui
 }
 
 func (b *LocalBackend) setVIPServicesTCPPortsIntercepted(svcPorts map[string][]uint16) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.setVIPServicesTCPPortsInterceptedLocked(svcPorts)
+}
+
+func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[string][]uint16) {
+	if len(svcPorts) == 0 {
+		b.shouldInterceptVIPServicesTCPPortAtomic.Store(func(netip.AddrPort) bool { return false })
+		return
+	}
 	nm := b.netMap
 	if nm == nil {
 		b.logf("can't set intercept function for Service TCP Ports, netMap is nil")
 		return
 	}
-	addrInfo := nm.GetVIPServiceAddrInfo()
-	if addrInfo == nil {
+	vipServiceIPMap := nm.GetVIPServiceIPMap()
+	if vipServiceIPMap == nil {
 		b.logf("can't set intercept function for Service TCP Ports, VIPServiceAddrInfo is nil")
 		return
 	}
@@ -3397,7 +3409,7 @@ func (b *LocalBackend) setVIPServicesTCPPortsIntercepted(svcPorts map[string][]u
 	svcAddrPorts := map[netip.Addr]func(uint16) bool{}
 	// Only set the intercept function if the service has been assigned a VIP.
 	for svcName, ports := range svcPorts {
-		if addrs, ok := addrInfo[svcName]; ok {
+		if addrs, ok := vipServiceIPMap[svcName]; ok {
 			for _, addr := range addrs {
 				svcAddrPorts[addr] = generateInterceptTCPPortFunc(ports)
 			}
@@ -3417,6 +3429,7 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(ipset.FalseContainsIPFunc())
 		b.setTCPPortsIntercepted(nil)
+		b.setVIPServicesTCPPortsInterceptedLocked(nil)
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
 	} else {
@@ -4130,24 +4143,16 @@ func (b *LocalBackend) handlePeerAPIConn(remote, local netip.AddrPort, c net.Con
 }
 
 func (b *LocalBackend) isLocalIP(ip netip.Addr) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	nm := b.NetMap()
 	return nm != nil && views.SliceContains(nm.GetAddresses(), netip.PrefixFrom(ip, ip.BitLen()))
 }
 
 func (b *LocalBackend) isVIPServiceIP(ip netip.Addr) bool {
-	// TODO(kevinliang10): if there is a way we can get the service addresses stored in the nm,
-	// both here and the ns.isVIPServiceIP function can be simpler. (Store a reserve ip to name map in lb)
-	nm := b.NetMap()
-	if nm == nil {
-		return false
-	}
-	vipServicesAddrInfo := nm.GetVIPServiceAddrInfo()
-	serviceAddrSet := set.Set[netip.Addr]{}
-	for _, addrs := range vipServicesAddrInfo {
-		serviceAddrSet.AddSlice(addrs)
-	}
-	_, ok := serviceAddrSet[ip]
-
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.ipVIPServiceMap[ip]
 	return ok
 }
 
@@ -5723,6 +5728,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	netns.SetDisableBindConnToInterface(nm.HasCap(tailcfg.CapabilityDebugDisableBindConnToInterface))
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
+	b.ipVIPServiceMap = nm.GetIPVIPServiceMap()
 	if nm == nil {
 		b.nodeByAddr = nil
 
@@ -6062,7 +6068,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	}
 
 	b.setTCPPortsIntercepted(handlePorts)
-	b.setVIPServicesTCPPortsIntercepted(vipServicesPorts)
+	b.setVIPServicesTCPPortsInterceptedLocked(vipServicesPorts)
 }
 
 // setServeProxyHandlersLocked ensures there is an http proxy handler for each

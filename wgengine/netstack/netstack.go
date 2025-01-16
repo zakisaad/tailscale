@@ -626,9 +626,9 @@ func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	var selfNode tailcfg.NodeView
 	if nm != nil {
 		localAddrs := nm.GetAddresses()
-		vipServicesAddrInfo := nm.GetVIPServiceAddrInfo()
+		vipServiceIPMap := nm.GetVIPServiceIPMap()
 		serviceAddrSet := set.Set[netip.Addr]{}
-		for _, addrs := range vipServicesAddrInfo {
+		for _, addrs := range vipServiceIPMap {
 			serviceAddrSet.AddSlice(addrs)
 		}
 		ns.atomicIsLocalIPFunc.Store(ipset.NewContainsIPFunc(localAddrs))
@@ -1011,8 +1011,8 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 		}
 	}
 	if ns.lb != nil && p.IPProto == ipproto.TCP && isService {
-		// TODO(kevinliang10): here I'm assuming when tun mode is on for a service,
-		// it's tcp and web are set blank. I didn't do anything to enforce this.
+		// An assumption holds for this to work: when tun mode is on for a service,
+		// it's tcp and web are not set. It's enforced in b.setServeConfigLocked.
 		if ns.lb.ShouldInterceptVIPServiceTCPPort(p.Dst) {
 			return true
 		}

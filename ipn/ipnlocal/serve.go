@@ -275,6 +275,10 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
 	}
 
+	if err := config.View().HasValidServicesConfig(); err != nil {
+		return err
+	}
+
 	nm := b.netMap
 	if nm == nil {
 		return errors.New("netMap is nil")
@@ -435,30 +439,24 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) (handler func(net.Conn) error) {
 	b.mu.Lock()
 	sc := b.serveConfig
+	ipVIPServiceMap := b.ipVIPServiceMap
 	b.mu.Unlock()
 
 	if !sc.Valid() {
 		return nil
 	}
 
-	nm := b.NetMap()
-	if nm == nil {
-		return nil
-	}
-
 	dport := dstAddr.Port()
 
-	//TODO(kevinliang10): is there a place we can save this map so we don't have to generate such a map
-	// every single time? (same question, will store a map ip to name in lb)
-	vipServiceIPMap := nm.GetVIPServiceIPMap()
-	dstSvc, ok := vipServiceIPMap[dstAddr.Addr()]
+	dstSvc, ok := ipVIPServiceMap[dstAddr.Addr()]
 	if !ok {
-		b.logf("The destination addr doesn't belong to a know service.")
+		b.logf("The destination addr doesn't belong to a known service.")
 		return nil
 	}
 
 	tcph, ok := sc.FindServiceTCP(dstSvc, dstAddr.Port())
 	if !ok {
+		b.logf("The destination service doesn't have a TCP handler set.")
 		return nil
 	}
 
